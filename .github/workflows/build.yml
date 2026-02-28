@@ -32,3 +32,69 @@ jobs:
           path: |
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/msi/*.msi
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Install frontend deps
+        run: npm install
+
+      - name: Build Tauri (macOS)
+        run: npm run build
+
+      - name: Create Install.command
+        run: |
+          cat > Install.command << 'EOF'
+          #!/bin/bash
+          DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+          APP="$DIR/Video Downloader.app"
+          DEST="/Applications/Video Downloader.app"
+
+          echo "Installing Video Downloader..."
+          cp -rf "$APP" "$DEST"
+          xattr -cr "$DEST"
+          echo "Done! Launching Video Downloader..."
+          open "$DEST"
+          EOF
+          chmod +x Install.command
+
+      - name: Prepare DMG content
+        run: |
+          mkdir dmg-content
+          cp -r "src-tauri/target/release/bundle/macos/Video Downloader.app" dmg-content/
+          cp Install.command dmg-content/
+
+      - name: Create DMG
+        run: |
+          create-dmg \
+            --volname "Video Downloader" \
+            --window-pos 200 120 \
+            --window-size 640 360 \
+            --icon-size 112 \
+            --no-internet-enable \
+            --hide-extension "Video Downloader.app" \
+            --hide-extension "Install.command" \
+            --icon "Video Downloader.app" 160 195 \
+            --icon "Install.command" 320 195 \
+            --app-drop-link 500 200 \
+            "VideoDownloader.dmg" \
+            "dmg-content/"
+
+      - name: Upload macOS DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: VideoDownloader-macOS
+          path: VideoDownloader.dmg
