@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Video Downloader</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ── Setup screen ─────────────────────────────────────── -->
+  <div id="setup-screen" class="screen hidden">
+    <div class="setup-card">
+      <h1>Video Downloader</h1>
+      <p class="setup-subtitle">Setting up required tools…</p>
+
+      <div class="setup-task" id="setup-task-label">Preparing…</div>
+
+      <div class="progress-track">
+        <div class="progress-fill" id="setup-progress-fill" style="width:0%"></div>
+      </div>
+      <div class="progress-pct" id="setup-progress-pct">0%</div>
+
+      <p class="setup-note">This only happens once.</p>
+
+      <div id="setup-error" class="error-banner hidden"></div>
+    </div>
+  </div>
+
+  <!-- ── Main screen ──────────────────────────────────────── -->
+  <div id="main-screen" class="screen hidden">
+
+    <header class="app-header">
+      <span class="app-title">Video Downloader</span>
+    </header>
+
+    <main class="form-area">
+
+      <!-- URL -->
+      <label class="field-label" for="url-input">Video URL</label>
+      <div class="input-row">
+        <input id="url-input" type="url" class="text-input"
+               placeholder="https://x.com/username/status/…" spellcheck="false" />
+        <button class="icon-btn" id="paste-btn" title="Paste from clipboard">⎘</button>
+      </div>
+
+      <!-- Quality -->
+      <label class="field-label" for="quality-select">Quality</label>
+      <select id="quality-select" class="select-input">
+        <option value="bv+ba">Best Quality</option>
+        <option value="bestvideo[height&lt;=1080]+bestaudio">1080p Max</option>
+        <option value="bestvideo[height&lt;=720]+bestaudio">720p</option>
+        <option value="bestvideo[height&lt;=480]+bestaudio">480p</option>
+        <option value="bestaudio/best">Audio Only (best)</option>
+        <option value="mp3">MP3</option>
+      </select>
+
+      <!-- Cookies -->
+      <label class="field-label" for="cookie-select">Use cookies from browser</label>
+      <select id="cookie-select" class="select-input">
+        <option value="none" selected>None</option>
+        <option value="safari">Safari</option>
+        <option value="chrome">Chrome</option>
+        <option value="firefox">Firefox</option>
+        <option value="edge">Edge</option>
+        <option value="brave">Brave</option>
+      </select>
+
+      <!-- Save to -->
+      <label class="field-label" for="output-display">Save to</label>
+      <div class="input-row">
+        <input id="output-display" type="text" class="text-input" readonly />
+        <button class="icon-btn" id="folder-btn" title="Choose folder">📁</button>
+      </div>
+
+      <!-- Download / Cancel -->
+      <button id="download-btn" class="primary-btn">Download</button>
+      <button id="cancel-btn" class="cancel-btn hidden">Cancel</button>
+
+    </main>
+
+    <section class="progress-section" id="progress-section">
+      <div class="progress-track">
+        <div class="progress-fill" id="dl-progress-fill" style="width:0%"></div>
+      </div>
+      <div class="progress-row">
+        <span id="dl-status">Ready</span>
+        <span id="dl-pct">0%</span>
+      </div>
+    </section>
+
+    <section class="log-section">
+      <div id="log-output" class="log-box"></div>
+      <button id="open-folder-btn" class="open-folder-btn hidden">Open Folder</button>
+    </section>
+
+  </div><!-- /main-screen -->
+
+  <script src="main.js"></script>
+</body>
+</html>
