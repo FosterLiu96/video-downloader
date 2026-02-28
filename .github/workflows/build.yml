@@ -3,6 +3,8 @@ name: Build Tauri App
 on:
   push:
     branches: [main]
+    tags:
+      - "v*"
   workflow_dispatch:
 
 jobs:
@@ -81,6 +83,7 @@ jobs:
         run: |
           create-dmg \
             --volname "Video Downloader" \
+            --background "assets/dmg-background.jpg" \
             --window-pos 200 120 \
             --window-size 640 360 \
             --icon-size 112 \
@@ -98,3 +101,33 @@ jobs:
         with:
           name: VideoDownloader-macOS
           path: VideoDownloader.dmg
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: VideoDownloader-Windows
+          path: artifacts/windows
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: VideoDownloader-macOS
+          path: artifacts/macos
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Video Downloader ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          files: |
+            artifacts/windows/*.exe
+            artifacts/windows/*.msi
+            artifacts/macos/*.dmg
