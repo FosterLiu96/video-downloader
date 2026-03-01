@@ -94,6 +94,10 @@ async function registerListeners() {
     if (event.payload.includes("[download] 100%")) {
       hadAnyDownload = true;
     }
+    if (event.payload.includes("Could not copy Chrome cookie database")) {
+      dlStatus.textContent = "Close Chrome completely and try again, or switch to Firefox cookies.";
+      dlStatus.style.color = "var(--error)";
+    }
   });
 
   await listen("download-progress", (event) => {
