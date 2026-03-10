@@ -130,7 +130,7 @@ async fn start_download(
     let ffmpeg_dir = bin_dir(&app).to_string_lossy().into_owned();
     args.extend([
         "-S".to_string(),
-        "vcodec:h264,res,fps,br".to_string(),
+        "res,fps,vcodec:h264,br".to_string(),
         "--merge-output-format".to_string(),
         "mp4".to_string(),
         "--ffmpeg-location".to_string(),
@@ -144,10 +144,17 @@ async fn start_download(
     std::fs::create_dir_all(&output_path)
         .map_err(|e| format!("Cannot create output folder: {}", e))?;
 
-    let mut child = tokio::process::Command::new(ytdlp_path(&app))
-        .args(&args)
+    let mut cmd = tokio::process::Command::new(ytdlp_path(&app));
+    cmd.args(&args)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    // Put yt-dlp in its own process group so that killing it also kills
+    // any child processes it spawns (e.g. ffmpeg for merging).
+    #[cfg(unix)]
+    cmd.process_group(0);
+
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("Failed to launch yt-dlp: {}", e))?;
 
@@ -201,6 +208,22 @@ async fn start_download(
             }
             _ = cancel_rx => {
                 cancelled_c.store(true, Ordering::SeqCst);
+                // Kill the whole process group so ffmpeg (spawned by yt-dlp)
+                // is also terminated.
+                #[cfg(unix)]
+                if let Some(pid) = child.id() {
+                    std::process::Command::new("kill")
+                        .args(["-KILL", &format!("-{}", pid)])
+                        .status()
+                        .ok();
+                }
+                #[cfg(windows)]
+                if let Some(pid) = child.id() {
+                    std::process::Command::new("taskkill")
+                        .args(["/F", "/T", "/PID", &pid.to_string()])
+                        .status()
+                        .ok();
+                }
                 child.kill().await.ok();
             }
         }
