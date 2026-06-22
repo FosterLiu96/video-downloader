@@ -70,7 +70,29 @@ npm run dev
 
 ### Releases
 
-Pushing a tag of the form `v1.2.3` triggers the GitHub Actions workflow and produces:
+Use [semantic versioning](https://semver.org/):
+
+- Patch (`1.1.0` → `1.1.1`) for bug fixes
+- Minor (`1.1.0` → `1.2.0`) for backward-compatible features
+- Major (`1.1.0` → `2.0.0`) for breaking changes
+
+Update every local version file with one command:
+
+```bash
+npm run version:set -- 1.2.0
+```
+
+Review and commit the resulting changes, then create a matching Git tag:
+
+```bash
+git add .
+git commit -m "Release 1.2.0"
+git tag v1.2.0
+git push origin main
+git push origin v1.2.0
+```
+
+Pushing the tag triggers the GitHub Actions workflow and produces:
 
 - **macOS:** `.app` bundle + DMG
 - **Windows:** NSIS `.exe` installer + `.msi`

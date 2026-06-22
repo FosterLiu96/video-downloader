@@ -16,6 +16,7 @@ pub struct AppState {
 
 impl Default for AppState {
     fn default() -> Self {
+        cleanup_stale_cookie_dirs();
         let cookie_dir =
             std::env::temp_dir().join(format!("video-downloader-cookies-{}", std::process::id()));
         std::fs::remove_dir_all(&cookie_dir).ok();
@@ -68,8 +69,9 @@ fn ytdlp_download_url() -> &'static str {
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-fn check_deps(app: AppHandle) -> bool {
-    ytdlp_path(&app).exists() && ffmpeg_path(&app).exists()
+async fn check_deps(app: AppHandle) -> bool {
+    read_ytdlp_version(&ytdlp_path(&app)).await.is_ok()
+        && ffmpeg_is_working(&ffmpeg_path(&app)).await
 }
 
 #[tauri::command]
@@ -189,14 +191,19 @@ async fn download_deps(app: AppHandle) -> Result<(), String> {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
     // — yt-dlp —
-    if !ytdlp_path(&app).exists() {
+    if read_ytdlp_version(&ytdlp_path(&app)).await.is_err() {
+        tokio::fs::remove_file(ytdlp_path(&app)).await.ok();
         app.emit("setup-task", "Downloading yt-dlp…").ok();
         download_file(&app, ytdlp_download_url(), &ytdlp_path(&app), 0.0, 0.12).await?;
         make_executable(&ytdlp_path(&app));
+        read_ytdlp_version(&ytdlp_path(&app))
+            .await
+            .map_err(|e| format!("Downloaded yt-dlp could not be validated: {e}"))?;
     }
 
     // — ffmpeg —
-    if !ffmpeg_path(&app).exists() {
+    if !ffmpeg_is_working(&ffmpeg_path(&app)).await {
+        tokio::fs::remove_file(ffmpeg_path(&app)).await.ok();
         let (ffmpeg_url, ffmpeg_bin) = if cfg!(windows) {
             (
                 "https://github.com/BtbN/ffmpeg-builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip",
@@ -223,6 +230,10 @@ async fn download_deps(app: AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())??;
 
         make_executable(&ffmpeg_path(&app));
+        if !ffmpeg_is_working(&ffmpeg_path(&app)).await {
+            tokio::fs::remove_file(ffmpeg_path(&app)).await.ok();
+            return Err("Downloaded ffmpeg could not be validated".to_string());
+        }
     }
 
     app.emit("setup-progress", 1.0_f64).ok();
@@ -251,6 +262,7 @@ async fn start_download(
 
     // Build yt-dlp argument list
     let mut args: Vec<String> = format_args;
+    args.push("--no-ignore-errors".to_string());
     let session_cookie_path = cookie_path_for_browser(&state.cookie_dir, &cookie_browser)?;
     if let Some(cookie_path) = &session_cookie_path {
         let has_cached_cookies = cookie_jar_has_entries(cookie_path);
@@ -297,6 +309,7 @@ async fn start_download(
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("Failed to launch yt-dlp: {}", e))?;
+    let sleep_guard = prevent_sleep(child.id());
 
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
@@ -330,6 +343,7 @@ async fn start_download(
     let cancelled = Arc::new(AtomicBool::new(false));
     let cancelled_c = cancelled.clone();
     tokio::spawn(async move {
+        let _sleep_guard = sleep_guard;
         tokio::select! {
             result = child.wait() => {
                 if !cancelled.load(Ordering::SeqCst) {
@@ -422,6 +436,120 @@ fn cookie_path_for_browser(
     }
 }
 
+fn cleanup_stale_cookie_dirs() {
+    let temp_dir = std::env::temp_dir();
+    let current_pid = std::process::id();
+    let Ok(entries) = std::fs::read_dir(&temp_dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(pid) = name
+            .strip_prefix("video-downloader-cookies-")
+            .and_then(|value| value.parse::<u32>().ok())
+        else {
+            continue;
+        };
+
+        if pid != current_pid && !process_is_running(pid) {
+            std::fs::remove_dir_all(entry.path()).ok();
+        }
+    }
+}
+
+#[cfg(unix)]
+fn process_is_running(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn process_is_running(pid: u32) -> bool {
+    std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\"")))
+        .unwrap_or(false)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn process_is_running(_pid: u32) -> bool {
+    false
+}
+
+struct SleepGuard {
+    helper: Option<std::process::Child>,
+}
+
+impl Drop for SleepGuard {
+    fn drop(&mut self) {
+        if let Some(helper) = self.helper.as_mut() {
+            helper.kill().ok();
+            helper.wait().ok();
+        }
+    }
+}
+
+fn prevent_sleep(pid: Option<u32>) -> SleepGuard {
+    let Some(pid) = pid else {
+        return SleepGuard { helper: None };
+    };
+
+    #[cfg(target_os = "macos")]
+    let helper = std::process::Command::new("/usr/bin/caffeinate")
+        .args(["-i", "-w", &pid.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok();
+
+    #[cfg(windows)]
+    let helper = {
+        let script = format!(
+            r#"
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class SleepControl {{
+    [DllImport("kernel32.dll")]
+    public static extern uint SetThreadExecutionState(uint esFlags);
+}}
+'@
+[SleepControl]::SetThreadExecutionState(0x80000001) | Out-Null
+try {{ Wait-Process -Id {pid} -ErrorAction SilentlyContinue }}
+finally {{ [SleepControl]::SetThreadExecutionState(0x80000000) | Out-Null }}
+"#
+        );
+        std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                &script,
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .ok()
+    };
+
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let helper = None;
+
+    SleepGuard { helper }
+}
+
 fn cookie_jar_has_entries(path: &std::path::Path) -> bool {
     std::fs::read_to_string(path)
         .map(|contents| {
@@ -476,6 +604,17 @@ async fn read_ytdlp_version(path: &std::path::Path) -> Result<String, String> {
     }
 }
 
+async fn ffmpeg_is_working(path: &std::path::Path) -> bool {
+    tokio::process::Command::new(path)
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
 async fn fetch_latest_ytdlp_version() -> Result<String, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
@@ -483,7 +622,10 @@ async fn fetch_latest_ytdlp_version() -> Result<String, String> {
         .map_err(|e| format!("Could not prepare update check: {e}"))?;
     let response = client
         .get("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest")
-        .header(reqwest::header::USER_AGENT, "VideoDownloader/1.0")
+        .header(
+            reqwest::header::USER_AGENT,
+            concat!("VideoDownloader/", env!("CARGO_PKG_VERSION")),
+        )
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
         .send()
         .await
@@ -583,18 +725,34 @@ async fn download_file(
     use futures_util::StreamExt;
     use tokio::io::AsyncWriteExt;
 
-    let resp = reqwest::get(url).await.map_err(|e| e.to_string())?;
+    let resp = reqwest::get(url)
+        .await
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?;
     let total = resp.content_length().unwrap_or(0);
     let mut received: u64 = 0;
 
-    let mut file = tokio::fs::File::create(dest)
+    let temp_dest = dest.with_extension("download");
+    tokio::fs::remove_file(&temp_dest).await.ok();
+
+    let mut file = tokio::fs::File::create(&temp_dest)
         .await
         .map_err(|e| e.to_string())?;
 
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| e.to_string())?;
-        file.write_all(&chunk).await.map_err(|e| e.to_string())?;
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(error) => {
+                tokio::fs::remove_file(&temp_dest).await.ok();
+                return Err(error.to_string());
+            }
+        };
+        if let Err(error) = file.write_all(&chunk).await {
+            tokio::fs::remove_file(&temp_dest).await.ok();
+            return Err(error.to_string());
+        }
         received += chunk.len() as u64;
         if total > 0 {
             let frac = received as f64 / total as f64;
@@ -603,6 +761,11 @@ async fn download_file(
         }
     }
     file.flush().await.map_err(|e| e.to_string())?;
+    drop(file);
+    tokio::fs::remove_file(dest).await.ok();
+    tokio::fs::rename(&temp_dest, dest)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 

@@ -254,6 +254,10 @@ html, body {
 .secondary-btn:hover { border-color: var(--accent); color: var(--accent); }
 .secondary-btn:disabled { opacity: 0.5; cursor: wait; }
 
+.setup-retry {
+  margin-top: 12px;
+}
+
 /* ── Progress section ─────────────────────────────────────── */
 .progress-section {
   padding: 14px 20px 0;

@@ -10,6 +10,7 @@ const setupTaskLabel   = document.getElementById("setup-task-label");
 const setupProgressFill= document.getElementById("setup-progress-fill");
 const setupProgressPct = document.getElementById("setup-progress-pct");
 const setupError       = document.getElementById("setup-error");
+const setupRetryBtn    = document.getElementById("setup-retry-btn");
 
 const urlInput         = document.getElementById("url-input");
 const pasteBtn         = document.getElementById("paste-btn");
@@ -45,11 +46,7 @@ async function init() {
     await showMain();
   } else {
     showSetup();
-    try {
-      await invoke("download_deps");
-    } catch (err) {
-      showSetupError(String(err));
-    }
+    await runSetup();
   }
 }
 
@@ -62,6 +59,25 @@ function showSetup() {
 function showSetupError(msg) {
   setupError.textContent = "Error: " + msg;
   setupError.classList.remove("hidden");
+  setupRetryBtn.classList.remove("hidden");
+}
+
+async function runSetup() {
+  setupRetryBtn.classList.add("hidden");
+  setupRetryBtn.disabled = true;
+  setupError.classList.add("hidden");
+  setupError.textContent = "";
+  setupTaskLabel.textContent = "Preparing…";
+  setupProgressFill.style.width = "0%";
+  setupProgressPct.textContent = "0%";
+
+  try {
+    await invoke("download_deps");
+  } catch (err) {
+    showSetupError(String(err));
+  } finally {
+    setupRetryBtn.disabled = false;
+  }
 }
 
 async function showMain() {
@@ -147,6 +163,8 @@ folderBtn.addEventListener("click", async () => {
     outputDisplay.value = outputPath;
   }
 });
+
+setupRetryBtn.addEventListener("click", runSetup);
 
 downloadBtn.addEventListener("click", async () => {
   const url = urlInput.value.trim();
@@ -244,10 +262,10 @@ async function refreshYtdlpStatus() {
 
 function buildFormatArgs(value) {
   if (value === "mp3") {
-    return ["--ignore-errors", "-x", "--audio-format", "mp3"];
+    return ["-x", "--audio-format", "mp3"];
   }
   if (value === "audio") {
-    return ["--ignore-errors", "-f", "bestaudio/best"];
+    return ["-f", "bestaudio/best"];
   }
 
   const heightFilter = value === "best" ? "" : `[height<=${value}]`;
@@ -258,7 +276,7 @@ function buildFormatArgs(value) {
     `best${heightFilter}[vcodec^=avc1]`,
   ].join("/");
 
-  return ["--ignore-errors", "-f", compatibleFormat];
+  return ["-f", compatibleFormat];
 }
 
 function resetDownloadUI() {
