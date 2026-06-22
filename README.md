@@ -70,32 +70,18 @@ npm run dev
 
 ### Releases
 
-Use [semantic versioning](https://semver.org/):
-
-- Patch (`1.1.0` → `1.1.1`) for bug fixes
-- Minor (`1.1.0` → `1.2.0`) for backward-compatible features
-- Major (`1.1.0` → `2.0.0`) for breaking changes
-
-Update every local version file with one command:
-
-```bash
-npm run version:set -- 1.2.0
-```
-
-Review and commit the resulting changes, then create a matching Git tag:
-
-```bash
-git add .
-git commit -m "Release 1.2.0"
-git tag v1.2.0
-git push origin main
-git push origin v1.2.0
-```
-
-Pushing the tag triggers the GitHub Actions workflow and produces:
+Pushing a version tag triggers the GitHub Actions workflow and produces:
 
 - **macOS:** `.app` bundle + DMG
 - **Windows:** NSIS `.exe` installer + `.msi`
+
+---
+
+## License
+
+Video Downloader is licensed under the [MIT License](LICENSE). Licenses and
+attributions for tools downloaded at runtime are listed in
+[Third-Party Software Notices](THIRD_PARTY_NOTICES.md).
 
 ---
 
