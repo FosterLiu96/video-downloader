@@ -56,7 +56,7 @@ replacePackageVersion(
 
 replacePackageVersion(
   "src-tauri/Cargo.lock",
-  /(\[\[package\]\]\nname = "video-downloader"\nversion = ")[^"]+(")/,
+  /(\[\[package\]\]\r?\nname = "video-downloader"\r?\nversion = ")[^"]+(")/,
   `$1${version}$2`,
 );
 
