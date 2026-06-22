@@ -19,6 +19,9 @@ const outputDisplay    = document.getElementById("output-display");
 const folderBtn        = document.getElementById("folder-btn");
 const downloadBtn      = document.getElementById("download-btn");
 const cancelBtn        = document.getElementById("cancel-btn");
+const ytdlpVersion     = document.getElementById("ytdlp-version");
+const ytdlpUpdateStatus= document.getElementById("ytdlp-update-status");
+const updateYtdlpBtn   = document.getElementById("update-ytdlp-btn");
 
 const dlProgressFill   = document.getElementById("dl-progress-fill");
 const dlStatus         = document.getElementById("dl-status");
@@ -29,6 +32,7 @@ const openFolderBtn    = document.getElementById("open-folder-btn");
 // ── State ─────────────────────────────────────────────────────
 let outputPath = "";
 let isDownloading = false;
+let isUpdatingYtdlp = false;
 let hadAnyDownload = false;
 
 // ── Init ──────────────────────────────────────────────────────
@@ -67,6 +71,7 @@ async function showMain() {
   // Fill default output path
   outputPath = await invoke("get_default_output_path");
   outputDisplay.value = outputPath;
+  await refreshYtdlpStatus();
 }
 
 // ── Event listeners (Tauri backend → frontend) ────────────────
@@ -181,12 +186,79 @@ openFolderBtn.addEventListener("click", async () => {
   await invoke("open_folder", { path: outputPath });
 });
 
+updateYtdlpBtn.addEventListener("click", async () => {
+  isUpdatingYtdlp = true;
+  updateYtdlpBtn.disabled = true;
+  downloadBtn.disabled = true;
+  updateYtdlpBtn.textContent = "Checking…";
+  ytdlpUpdateStatus.textContent = "Downloading and validating the latest release…";
+  ytdlpUpdateStatus.style.color = "var(--muted)";
+
+  try {
+    const result = await invoke("update_ytdlp");
+    ytdlpVersion.textContent = "Version: " + result.current_version;
+    if (result.updated) {
+      ytdlpUpdateStatus.textContent =
+        `Updated from ${result.previous_version} to ${result.current_version}.`;
+    } else {
+      ytdlpUpdateStatus.textContent = "Already up to date.";
+    }
+    ytdlpUpdateStatus.style.color = "var(--success)";
+  } catch (err) {
+    ytdlpUpdateStatus.textContent = "Update failed: " + err;
+    ytdlpUpdateStatus.style.color = "var(--error)";
+  } finally {
+    isUpdatingYtdlp = false;
+    updateYtdlpBtn.disabled = isDownloading;
+    downloadBtn.disabled = isDownloading;
+    updateYtdlpBtn.textContent = "Update yt-dlp";
+  }
+});
+
 // ── Helpers ───────────────────────────────────────────────────
+async function refreshYtdlpStatus() {
+  try {
+    const status = await invoke("get_ytdlp_status");
+    ytdlpVersion.textContent = "Version: " + status.current_version;
+
+    if (status.update_available) {
+      const age = status.days_outdated == null
+        ? ""
+        : ` · ${status.days_outdated} ${status.days_outdated === 1 ? "day" : "days"} outdated`;
+      ytdlpUpdateStatus.textContent =
+        `Update available: ${status.latest_version}${age}`;
+      ytdlpUpdateStatus.style.color = "var(--warning)";
+    } else if (status.latest_version) {
+      ytdlpUpdateStatus.textContent = "Up to date.";
+      ytdlpUpdateStatus.style.color = "var(--success)";
+    } else {
+      ytdlpUpdateStatus.textContent = "Could not check for updates.";
+      ytdlpUpdateStatus.style.color = "var(--muted)";
+    }
+  } catch (err) {
+    ytdlpVersion.textContent = "Version unavailable";
+    ytdlpUpdateStatus.textContent = String(err);
+    ytdlpUpdateStatus.style.color = "var(--error)";
+  }
+}
+
 function buildFormatArgs(value) {
   if (value === "mp3") {
     return ["--ignore-errors", "-x", "--audio-format", "mp3"];
   }
-  return ["--ignore-errors", "-f", value];
+  if (value === "audio") {
+    return ["--ignore-errors", "-f", "bestaudio/best"];
+  }
+
+  const heightFilter = value === "best" ? "" : `[height<=${value}]`;
+  const compatibleFormat = [
+    `bestvideo${heightFilter}[vcodec^=avc1]+bestaudio[ext=m4a]`,
+    `bestvideo${heightFilter}[vcodec^=avc1]+bestaudio`,
+    `best${heightFilter}[vcodec^=avc1][ext=mp4]`,
+    `best${heightFilter}[vcodec^=avc1]`,
+  ].join("/");
+
+  return ["--ignore-errors", "-f", compatibleFormat];
 }
 
 function resetDownloadUI() {
@@ -203,7 +275,8 @@ function setDownloading(active) {
   isDownloading = active;
   downloadBtn.classList.toggle("hidden", active);
   cancelBtn.classList.toggle("hidden", !active);
-  downloadBtn.disabled = active;
+  downloadBtn.disabled = active || isUpdatingYtdlp;
+  updateYtdlpBtn.disabled = active;
 }
 
 function appendLog(line) {

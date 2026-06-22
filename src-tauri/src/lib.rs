@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -10,13 +11,27 @@ use tokio::sync::{oneshot, Mutex};
 
 pub struct AppState {
     cancel_tx: Mutex<Option<oneshot::Sender<()>>>,
+    cookie_dir: PathBuf,
 }
 
 impl Default for AppState {
     fn default() -> Self {
+        let cookie_dir =
+            std::env::temp_dir().join(format!("video-downloader-cookies-{}", std::process::id()));
+        std::fs::remove_dir_all(&cookie_dir).ok();
+        std::fs::create_dir_all(&cookie_dir).ok();
+        secure_cookie_dir(&cookie_dir);
+
         Self {
             cancel_tx: Mutex::new(None),
+            cookie_dir,
         }
+    }
+}
+
+impl Drop for AppState {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.cookie_dir).ok();
     }
 }
 
@@ -27,11 +42,27 @@ fn bin_dir(app: &AppHandle) -> PathBuf {
 }
 
 fn ytdlp_path(app: &AppHandle) -> PathBuf {
-    bin_dir(app).join(if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" })
+    bin_dir(app).join(if cfg!(windows) {
+        "yt-dlp.exe"
+    } else {
+        "yt-dlp"
+    })
 }
 
 fn ffmpeg_path(app: &AppHandle) -> PathBuf {
-    bin_dir(app).join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" })
+    bin_dir(app).join(if cfg!(windows) {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    })
+}
+
+fn ytdlp_download_url() -> &'static str {
+    if cfg!(windows) {
+        "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+    } else {
+        "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
+    }
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────────
@@ -39,6 +70,108 @@ fn ffmpeg_path(app: &AppHandle) -> PathBuf {
 #[tauri::command]
 fn check_deps(app: AppHandle) -> bool {
     ytdlp_path(&app).exists() && ffmpeg_path(&app).exists()
+}
+
+#[tauri::command]
+async fn get_ytdlp_version(app: AppHandle) -> Result<String, String> {
+    read_ytdlp_version(&ytdlp_path(&app)).await
+}
+
+#[derive(Serialize)]
+struct YtdlpStatus {
+    current_version: String,
+    latest_version: Option<String>,
+    update_available: bool,
+    days_outdated: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct GithubRelease {
+    tag_name: String,
+}
+
+#[tauri::command]
+async fn get_ytdlp_status(app: AppHandle) -> Result<YtdlpStatus, String> {
+    let current_version = read_ytdlp_version(&ytdlp_path(&app)).await?;
+    let latest_version = fetch_latest_ytdlp_version().await.ok();
+    let update_available = latest_version
+        .as_ref()
+        .map(
+            |latest| match (version_day(&current_version), version_day(latest)) {
+                (Some(current_day), Some(latest_day)) => latest_day > current_day,
+                _ => latest != &current_version,
+            },
+        )
+        .unwrap_or(false);
+    let days_outdated = latest_version.as_ref().and_then(|latest| {
+        let current_day = version_day(&current_version)?;
+        let latest_day = version_day(latest)?;
+        (latest_day > current_day).then_some(latest_day - current_day)
+    });
+
+    Ok(YtdlpStatus {
+        current_version,
+        latest_version,
+        update_available,
+        days_outdated,
+    })
+}
+
+#[derive(Serialize)]
+struct YtdlpUpdateResult {
+    previous_version: String,
+    current_version: String,
+    updated: bool,
+}
+
+#[tauri::command]
+async fn update_ytdlp(app: AppHandle) -> Result<YtdlpUpdateResult, String> {
+    let current_path = ytdlp_path(&app);
+    let previous_version = read_ytdlp_version(&current_path)
+        .await
+        .unwrap_or_else(|_| "Unknown".to_string());
+    let update_path = bin_dir(&app).join(if cfg!(windows) {
+        "yt-dlp-update.exe"
+    } else {
+        "yt-dlp-update"
+    });
+
+    if update_path.exists() {
+        tokio::fs::remove_file(&update_path)
+            .await
+            .map_err(|e| format!("Cannot remove old update file: {e}"))?;
+    }
+
+    if let Err(error) = download_to_path(ytdlp_download_url(), &update_path).await {
+        tokio::fs::remove_file(&update_path).await.ok();
+        return Err(error);
+    }
+    make_executable(&update_path);
+
+    let current_version = match read_ytdlp_version(&update_path).await {
+        Ok(version) => version,
+        Err(error) => {
+            tokio::fs::remove_file(&update_path).await.ok();
+            return Err(format!("Downloaded yt-dlp could not be validated: {error}"));
+        }
+    };
+
+    if current_version == previous_version {
+        tokio::fs::remove_file(&update_path).await.ok();
+        return Ok(YtdlpUpdateResult {
+            previous_version,
+            current_version,
+            updated: false,
+        });
+    }
+
+    replace_ytdlp(&current_path, &update_path).await?;
+
+    Ok(YtdlpUpdateResult {
+        previous_version,
+        current_version,
+        updated: true,
+    })
 }
 
 #[tauri::command]
@@ -57,13 +190,8 @@ async fn download_deps(app: AppHandle) -> Result<(), String> {
 
     // — yt-dlp —
     if !ytdlp_path(&app).exists() {
-        let url = if cfg!(windows) {
-            "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
-        } else {
-            "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
-        };
         app.emit("setup-task", "Downloading yt-dlp…").ok();
-        download_file(&app, url, &ytdlp_path(&app), 0.0, 0.12).await?;
+        download_file(&app, ytdlp_download_url(), &ytdlp_path(&app), 0.0, 0.12).await?;
         make_executable(&ytdlp_path(&app));
     }
 
@@ -123,15 +251,27 @@ async fn start_download(
 
     // Build yt-dlp argument list
     let mut args: Vec<String> = format_args;
-    if cookie_browser != "none" && !cookie_browser.is_empty() {
-        args.push("--cookies-from-browser".to_string());
-        args.push(cookie_browser);
+    let session_cookie_path = cookie_path_for_browser(&state.cookie_dir, &cookie_browser)?;
+    if let Some(cookie_path) = &session_cookie_path {
+        let has_cached_cookies = cookie_jar_has_entries(cookie_path);
+        let cookie_path = cookie_path.to_string_lossy().into_owned();
+        if has_cached_cookies {
+            args.push("--cookies".to_string());
+            args.push(cookie_path);
+        } else {
+            args.push("--cookies-from-browser".to_string());
+            args.push(cookie_browser);
+            args.push("--cookies".to_string());
+            args.push(cookie_path);
+        }
     }
     let ffmpeg_dir = bin_dir(&app).to_string_lossy().into_owned();
     args.extend([
         "-S".to_string(),
-        "res,fps,vcodec:h264,br".to_string(),
+        "res,fps,br".to_string(),
         "--merge-output-format".to_string(),
+        "mp4".to_string(),
+        "--remux-video".to_string(),
         "mp4".to_string(),
         "--ffmpeg-location".to_string(),
         ffmpeg_dir,
@@ -192,18 +332,19 @@ async fn start_download(
     tokio::spawn(async move {
         tokio::select! {
             result = child.wait() => {
-                if cancelled.load(Ordering::SeqCst) { return; }
-                match result {
-                    Ok(status) => {
-                        if status.code() == Some(0) {
-                            app3.emit("download-complete", ()).ok();
-                        } else {
-                            let code = status.code().unwrap_or(-1);
-                            app3.emit("download-error",
-                                format!("yt-dlp exited with code {}", code)).ok();
+                if !cancelled.load(Ordering::SeqCst) {
+                    match result {
+                        Ok(status) => {
+                            if status.code() == Some(0) {
+                                app3.emit("download-complete", ()).ok();
+                            } else {
+                                let code = status.code().unwrap_or(-1);
+                                app3.emit("download-error",
+                                    format!("yt-dlp exited with code {}", code)).ok();
+                            }
                         }
+                        Err(e) => { app3.emit("download-error", e.to_string()).ok(); }
                     }
-                    Err(e) => { app3.emit("download-error", e.to_string()).ok(); }
                 }
             }
             _ = cancel_rx => {
@@ -227,6 +368,9 @@ async fn start_download(
                 child.kill().await.ok();
             }
         }
+        if let Some(cookie_path) = session_cookie_path {
+            secure_cookie_file(&cookie_path);
+        }
     });
 
     Ok(())
@@ -244,14 +388,190 @@ async fn cancel_download(state: State<'_, AppState>) -> Result<(), ()> {
 #[tauri::command]
 fn open_folder(path: String) {
     #[cfg(target_os = "macos")]
-    { std::process::Command::new("open").arg(&path).spawn().ok(); }
+    {
+        std::process::Command::new("open").arg(&path).spawn().ok();
+    }
     #[cfg(target_os = "windows")]
-    { std::process::Command::new("explorer").arg(&path).spawn().ok(); }
+    {
+        std::process::Command::new("explorer")
+            .arg(&path)
+            .spawn()
+            .ok();
+    }
     #[cfg(target_os = "linux")]
-    { std::process::Command::new("xdg-open").arg(&path).spawn().ok(); }
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .ok();
+    }
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
+
+fn cookie_path_for_browser(
+    cookie_dir: &std::path::Path,
+    browser: &str,
+) -> Result<Option<PathBuf>, String> {
+    match browser {
+        "" | "none" => Ok(None),
+        "safari" | "chrome" | "firefox" | "edge" | "brave" => {
+            Ok(Some(cookie_dir.join(format!("{browser}.txt"))))
+        }
+        _ => Err("Unsupported cookie browser".to_string()),
+    }
+}
+
+fn cookie_jar_has_entries(path: &std::path::Path) -> bool {
+    std::fs::read_to_string(path)
+        .map(|contents| {
+            contents
+                .lines()
+                .any(|line| !line.is_empty() && !line.starts_with('#'))
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(unix)]
+fn secure_cookie_dir(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).ok();
+}
+
+#[cfg(not(unix))]
+fn secure_cookie_dir(_path: &std::path::Path) {}
+
+#[cfg(unix)]
+fn secure_cookie_file(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if path.exists() {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).ok();
+    }
+}
+
+#[cfg(not(unix))]
+fn secure_cookie_file(_path: &std::path::Path) {}
+
+async fn read_ytdlp_version(path: &std::path::Path) -> Result<String, String> {
+    let output = tokio::process::Command::new(path)
+        .arg("--version")
+        .output()
+        .await
+        .map_err(|e| format!("Could not run yt-dlp: {e}"))?;
+
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if error.is_empty() {
+            format!("yt-dlp exited with code {:?}", output.status.code())
+        } else {
+            error
+        });
+    }
+
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if version.is_empty() {
+        Err("yt-dlp returned an empty version".to_string())
+    } else {
+        Ok(version)
+    }
+}
+
+async fn fetch_latest_ytdlp_version() -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| format!("Could not prepare update check: {e}"))?;
+    let response = client
+        .get("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest")
+        .header(reqwest::header::USER_AGENT, "VideoDownloader/1.0")
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|e| format!("Could not check for updates: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("Update check failed: {e}"))?;
+    let body = response
+        .bytes()
+        .await
+        .map_err(|e| format!("Could not read update information: {e}"))?;
+    let release: GithubRelease = serde_json::from_slice(&body)
+        .map_err(|e| format!("Could not parse update information: {e}"))?;
+
+    Ok(release.tag_name.trim_start_matches('v').to_string())
+}
+
+fn version_day(version: &str) -> Option<i64> {
+    let date = version.trim_start_matches('v').get(..10)?;
+    let mut parts = date.split('.');
+    let year = parts.next()?.parse::<i64>().ok()?;
+    let month = parts.next()?.parse::<u32>().ok()?;
+    let day = parts.next()?.parse::<u32>().ok()?;
+    if parts.next().is_some() || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    Some(days_from_civil(year, month, day))
+}
+
+fn days_from_civil(mut year: i64, month: u32, day: u32) -> i64 {
+    year -= i64::from(month <= 2);
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let shifted_month = month as i64 + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * shifted_month + 2) / 5 + day as i64 - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era
+}
+
+async fn download_to_path(url: &str, dest: &std::path::Path) -> Result<(), String> {
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
+
+    let response = reqwest::get(url)
+        .await
+        .map_err(|e| format!("Could not download yt-dlp: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("yt-dlp download failed: {e}"))?;
+
+    let mut file = tokio::fs::File::create(dest)
+        .await
+        .map_err(|e| format!("Cannot create update file: {e}"))?;
+    let mut stream = response.bytes_stream();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("yt-dlp download failed: {e}"))?;
+        file.write_all(&chunk)
+            .await
+            .map_err(|e| format!("Cannot write update file: {e}"))?;
+    }
+
+    file.flush()
+        .await
+        .map_err(|e| format!("Cannot finish update file: {e}"))
+}
+
+#[cfg(not(windows))]
+async fn replace_ytdlp(current: &std::path::Path, update: &std::path::Path) -> Result<(), String> {
+    tokio::fs::rename(update, current)
+        .await
+        .map_err(|e| format!("Could not install yt-dlp update: {e}"))
+}
+
+#[cfg(windows)]
+async fn replace_ytdlp(current: &std::path::Path, update: &std::path::Path) -> Result<(), String> {
+    let backup = current.with_extension("exe.backup");
+    tokio::fs::remove_file(&backup).await.ok();
+    tokio::fs::rename(current, &backup)
+        .await
+        .map_err(|e| format!("Could not prepare yt-dlp update: {e}"))?;
+
+    if let Err(error) = tokio::fs::rename(update, current).await {
+        tokio::fs::rename(&backup, current).await.ok();
+        return Err(format!("Could not install yt-dlp update: {error}"));
+    }
+
+    tokio::fs::remove_file(backup).await.ok();
+    Ok(())
+}
 
 async fn download_file(
     app: &AppHandle,
@@ -341,6 +661,9 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             check_deps,
+            get_ytdlp_version,
+            get_ytdlp_status,
+            update_ytdlp,
             download_deps,
             get_default_output_path,
             start_download,

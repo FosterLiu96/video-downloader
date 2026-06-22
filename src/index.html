@@ -47,11 +47,11 @@
       <!-- Quality -->
       <label class="field-label" for="quality-select">Quality</label>
       <select id="quality-select" class="select-input">
-        <option value="bv+ba">Best Quality</option>
-        <option value="bestvideo[height&lt;=1080]+bestaudio">1080p Max</option>
-        <option value="bestvideo[height&lt;=720]+bestaudio">720p</option>
-        <option value="bestvideo[height&lt;=480]+bestaudio">480p</option>
-        <option value="bestaudio/best">Audio Only (best)</option>
+        <option value="best">Best Quality</option>
+        <option value="1080">1080p Max</option>
+        <option value="720">720p</option>
+        <option value="480">480p</option>
+        <option value="audio">Audio Only (best)</option>
         <option value="mp3">MP3</option>
       </select>
 
@@ -65,12 +65,23 @@
         <option value="edge">Edge</option>
         <option value="brave">Brave</option>
       </select>
+      <div class="field-note">Browser access is remembered until you close the app.</div>
 
       <!-- Save to -->
       <label class="field-label" for="output-display">Save to</label>
       <div class="input-row">
         <input id="output-display" type="text" class="text-input" readonly />
         <button class="icon-btn" id="folder-btn" title="Choose folder">📁</button>
+      </div>
+
+      <!-- yt-dlp version and manual update -->
+      <div class="tool-row">
+        <div>
+          <div class="tool-name">yt-dlp</div>
+          <div id="ytdlp-version" class="tool-version">Version: checking…</div>
+          <div id="ytdlp-update-status" class="tool-status"></div>
+        </div>
+        <button id="update-ytdlp-btn" class="secondary-btn">Update yt-dlp</button>
       </div>
 
       <!-- Download / Cancel -->

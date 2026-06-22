@@ -11,6 +11,7 @@
   --muted:     #888aaa;
   --error:     #e05a5a;
   --success:   #5ae08a;
+  --warning:   #e0b85a;
   --radius:    8px;
   --font:      -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
 }
@@ -130,6 +131,11 @@ html, body {
   margin-top: 10px;
 }
 
+.field-note {
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .input-row {
   display: flex;
   gap: 6px;
@@ -176,18 +182,47 @@ html, body {
 
 .icon-btn:hover { border-color: var(--accent); background: var(--accent); color: #fff; }
 
+/* ── Tool version ─────────────────────────────────────────── */
+.tool-row {
+  margin-top: 12px;
+  padding: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.tool-name {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tool-version, .tool-status {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.tool-status:empty { display: none; }
+
 /* ── Buttons ──────────────────────────────────────────────── */
+.primary-btn, .cancel-btn, .secondary-btn {
+  font-family: var(--font);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
 .primary-btn, .cancel-btn {
   margin-top: 14px;
   width: 100%;
   padding: 10px;
   border: none;
   border-radius: var(--radius);
-  font-family: var(--font);
   font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s;
 }
 
 .primary-btn {
@@ -205,6 +240,19 @@ html, body {
 }
 
 .cancel-btn:hover { background: rgba(224, 90, 90, 0.15); }
+
+.secondary-btn {
+  flex-shrink: 0;
+  padding: 7px 10px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.secondary-btn:hover { border-color: var(--accent); color: var(--accent); }
+.secondary-btn:disabled { opacity: 0.5; cursor: wait; }
 
 /* ── Progress section ─────────────────────────────────────── */
 .progress-section {

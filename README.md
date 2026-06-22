@@ -13,7 +13,7 @@ On first launch the app downloads `yt-dlp` and `ffmpeg` automatically — no man
 ## Features
 
 - Paste any URL and pick a quality (Best, 1080p, 720p, 480p, Audio Only, MP3)
-- Merges video + audio streams into a single `.mp4` via ffmpeg
+- Prefers original H.264/AAC streams and losslessly remuxes them into a macOS-compatible `.mp4`
 - Cookie passthrough from Safari, Chrome, Firefox, Edge, or Brave for members-only or age-gated content
 - Live download log and progress bar
 - Cancel stops the download immediately (kills yt-dlp and any spawned ffmpeg child processes)
