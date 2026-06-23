@@ -68,6 +68,16 @@ jobs:
       - name: Build Tauri (macOS)
         run: npm run build
 
+      - name: Ad-hoc sign macOS app
+        run: |
+          codesign --force --deep --sign - \
+            "src-tauri/target/release/bundle/macos/Video Downloader.app"
+
+      - name: Verify macOS app signature
+        run: |
+          codesign --verify --deep --strict --verbose=2 \
+            "src-tauri/target/release/bundle/macos/Video Downloader.app"
+
       - name: Create Install.command
         run: |
           cat > Install.command << 'EOF'
