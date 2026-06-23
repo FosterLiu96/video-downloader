@@ -346,6 +346,9 @@ async fn start_download(
         .ok_or_else(|| "ffmpeg is not installed".to_string())?;
     let mut args: Vec<String> = format_args;
     args.push("--no-ignore-errors".to_string());
+    if is_direct_instagram_story_url(&url) {
+        args.push("--no-playlist".to_string());
+    }
     let session_cookie_path = cookie_path_for_browser(&state.cookie_dir, &cookie_browser)?;
     if let Some(cookie_path) = &session_cookie_path {
         let has_cached_cookies = cookie_jar_has_entries(cookie_path);
@@ -517,6 +520,20 @@ fn cookie_path_for_browser(
         }
         _ => Err("Unsupported cookie browser".to_string()),
     }
+}
+
+fn is_direct_instagram_story_url(url: &str) -> bool {
+    let Some((_, story_path)) = url.split_once("instagram.com/stories/") else {
+        return false;
+    };
+    let mut segments = story_path
+        .split(['/', '?', '#'])
+        .filter(|segment| !segment.is_empty());
+    let _username = segments.next();
+    segments
+        .next()
+        .map(|story_id| story_id.chars().all(|character| character.is_ascii_digit()))
+        .unwrap_or(false)
 }
 
 fn cleanup_stale_cookie_dirs() {
@@ -902,6 +919,31 @@ fn parse_progress(line: &str) -> Option<f64> {
         .map(|i| i + 1)
         .unwrap_or(0);
     before[num_start..].parse::<f64>().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_direct_instagram_story_url;
+
+    #[test]
+    fn recognizes_direct_instagram_story_urls() {
+        assert!(is_direct_instagram_story_url(
+            "https://www.instagram.com/stories/account/3924911627980093004/"
+        ));
+        assert!(is_direct_instagram_story_url(
+            "https://instagram.com/stories/account/3924911627980093004/?utm_source=test"
+        ));
+    }
+
+    #[test]
+    fn leaves_story_feeds_and_other_urls_as_playlists() {
+        assert!(!is_direct_instagram_story_url(
+            "https://www.instagram.com/stories/account/"
+        ));
+        assert!(!is_direct_instagram_story_url(
+            "https://www.instagram.com/p/example/"
+        ));
+    }
 }
 
 // ── App entry point ───────────────────────────────────────────────────────────

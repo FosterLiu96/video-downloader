@@ -304,9 +304,14 @@ function buildFormatArgs(value) {
   const heightFilter = value === "best" ? "" : `[height<=${value}]`;
   const compatibleFormat = [
     `bestvideo${heightFilter}[vcodec^=avc1]+bestaudio[ext=m4a]`,
+    `bestvideo${heightFilter}[vcodec^=h264]+bestaudio[ext=m4a]`,
     `bestvideo${heightFilter}[vcodec^=avc1]+bestaudio`,
+    `bestvideo${heightFilter}[vcodec^=h264]+bestaudio`,
     `best${heightFilter}[vcodec^=avc1][ext=mp4]`,
+    `best${heightFilter}[vcodec^=h264][ext=mp4]`,
     `best${heightFilter}[vcodec^=avc1]`,
+    `best${heightFilter}[vcodec^=h264]`,
+    `best${heightFilter}[ext=mp4][vcodec!^=?vp09]`,
   ].join("/");
 
   return ["-f", compatibleFormat];
