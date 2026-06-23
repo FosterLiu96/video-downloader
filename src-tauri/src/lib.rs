@@ -344,6 +344,14 @@ async fn start_download(
     let (ffmpeg, _) = resolve_ffmpeg(&app)
         .await
         .ok_or_else(|| "ffmpeg is not installed".to_string())?;
+    let audio_only = format_args
+        .iter()
+        .any(|argument| argument == "-x" || argument == "bestaudio/best");
+    let output_template = if audio_only {
+        "%(title)s [%(id)s].%(ext)s"
+    } else {
+        "%(title)s [%(id)s] [%(height)sp].%(ext)s"
+    };
     let mut args: Vec<String> = format_args;
     args.push("--no-ignore-errors".to_string());
     if is_direct_instagram_story_url(&url) {
@@ -376,6 +384,8 @@ async fn start_download(
         "--newline".to_string(),
         "-P".to_string(),
         output_path.clone(),
+        "-o".to_string(),
+        output_template.to_string(),
         url,
     ]);
 

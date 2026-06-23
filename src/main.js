@@ -314,6 +314,14 @@ function buildFormatArgs(value) {
     `best${heightFilter}[ext=mp4][vcodec!^=?vp09]`,
   ].join("/");
 
+  if (value === "best") {
+    const highResolutionFormat = [
+      "bestvideo[height>=2160]+bestaudio",
+      "best[height>=2160]",
+    ].join("/");
+    return ["-f", `${highResolutionFormat}/${compatibleFormat}`];
+  }
+
   return ["-f", compatibleFormat];
 }
 
