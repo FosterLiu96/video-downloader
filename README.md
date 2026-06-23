@@ -6,7 +6,8 @@ A small desktop app for downloading videos from X/Twitter, bilibili, brightcove 
 [![Downloads](https://img.shields.io/github/downloads/FosterLiu96/video-downloader/total?style=for-the-badge)](https://github.com/FosterLiu96/video-downloader/releases)
 [![License](https://img.shields.io/github/license/FosterLiu96/video-downloader?style=for-the-badge)](LICENSE)
 
-On first launch the app downloads `yt-dlp` and `ffmpeg` automatically — no manual setup needed.
+The app uses existing `yt-dlp` and `ffmpeg` installations when available. If
+either tool is missing, it downloads a private copy automatically.
 
 ---
 
@@ -37,7 +38,8 @@ On first launch the app downloads `yt-dlp` and `ffmpeg` automatically — no man
 └── .github/workflows/build.yml   # CI: builds installers for macOS + Windows
 ```
 
-**Runtime dependencies** (downloaded automatically into the app data directory on first launch):
+**Runtime dependencies** (existing installations are preferred; missing tools
+are downloaded into the app data directory):
 
 | Tool | Source |
 |------|--------|

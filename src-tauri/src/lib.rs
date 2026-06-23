@@ -42,7 +42,7 @@ fn bin_dir(app: &AppHandle) -> PathBuf {
     app.path().app_data_dir().unwrap().join("bin")
 }
 
-fn ytdlp_path(app: &AppHandle) -> PathBuf {
+fn managed_ytdlp_path(app: &AppHandle) -> PathBuf {
     bin_dir(app).join(if cfg!(windows) {
         "yt-dlp.exe"
     } else {
@@ -50,12 +50,70 @@ fn ytdlp_path(app: &AppHandle) -> PathBuf {
     })
 }
 
-fn ffmpeg_path(app: &AppHandle) -> PathBuf {
+fn managed_ffmpeg_path(app: &AppHandle) -> PathBuf {
     bin_dir(app).join(if cfg!(windows) {
         "ffmpeg.exe"
     } else {
         "ffmpeg"
     })
+}
+
+fn external_tool_candidates(tool: &str) -> Vec<PathBuf> {
+    let executable = if cfg!(windows) {
+        format!("{tool}.exe")
+    } else {
+        tool.to_string()
+    };
+    let mut candidates = Vec::new();
+
+    #[cfg(target_os = "macos")]
+    {
+        candidates.extend([
+            PathBuf::from("/opt/homebrew/bin").join(&executable),
+            PathBuf::from("/usr/local/bin").join(&executable),
+            PathBuf::from("/opt/local/bin").join(&executable),
+        ]);
+        if let Some(home) = dirs::home_dir() {
+            candidates.push(home.join(".local/bin").join(&executable));
+        }
+    }
+
+    if let Some(path) = std::env::var_os("PATH") {
+        candidates.extend(std::env::split_paths(&path).map(|dir| dir.join(&executable)));
+    }
+
+    let mut found = Vec::new();
+    for candidate in candidates {
+        if candidate.is_file() && !found.contains(&candidate) {
+            found.push(candidate);
+        }
+    }
+    found
+}
+
+async fn resolve_ytdlp(app: &AppHandle) -> Option<(PathBuf, bool)> {
+    for path in external_tool_candidates("yt-dlp") {
+        if read_ytdlp_version(&path).await.is_ok() {
+            return Some((path, false));
+        }
+    }
+
+    let managed = managed_ytdlp_path(app);
+    read_ytdlp_version(&managed)
+        .await
+        .ok()
+        .map(|_| (managed, true))
+}
+
+async fn resolve_ffmpeg(app: &AppHandle) -> Option<(PathBuf, bool)> {
+    for path in external_tool_candidates("ffmpeg") {
+        if ffmpeg_is_working(&path).await {
+            return Some((path, false));
+        }
+    }
+
+    let managed = managed_ffmpeg_path(app);
+    ffmpeg_is_working(&managed).await.then_some((managed, true))
 }
 
 fn ytdlp_download_url() -> &'static str {
@@ -70,13 +128,15 @@ fn ytdlp_download_url() -> &'static str {
 
 #[tauri::command]
 async fn check_deps(app: AppHandle) -> bool {
-    read_ytdlp_version(&ytdlp_path(&app)).await.is_ok()
-        && ffmpeg_is_working(&ffmpeg_path(&app)).await
+    resolve_ytdlp(&app).await.is_some() && resolve_ffmpeg(&app).await.is_some()
 }
 
 #[tauri::command]
 async fn get_ytdlp_version(app: AppHandle) -> Result<String, String> {
-    read_ytdlp_version(&ytdlp_path(&app)).await
+    let (path, _) = resolve_ytdlp(&app)
+        .await
+        .ok_or_else(|| "yt-dlp is not installed".to_string())?;
+    read_ytdlp_version(&path).await
 }
 
 #[derive(Serialize)]
@@ -85,6 +145,8 @@ struct YtdlpStatus {
     latest_version: Option<String>,
     update_available: bool,
     days_outdated: Option<i64>,
+    managed_by_app: bool,
+    install_path: String,
 }
 
 #[derive(Deserialize)]
@@ -94,7 +156,10 @@ struct GithubRelease {
 
 #[tauri::command]
 async fn get_ytdlp_status(app: AppHandle) -> Result<YtdlpStatus, String> {
-    let current_version = read_ytdlp_version(&ytdlp_path(&app)).await?;
+    let (path, managed_by_app) = resolve_ytdlp(&app)
+        .await
+        .ok_or_else(|| "yt-dlp is not installed".to_string())?;
+    let current_version = read_ytdlp_version(&path).await?;
     let latest_version = fetch_latest_ytdlp_version().await.ok();
     let update_available = latest_version
         .as_ref()
@@ -116,6 +181,8 @@ async fn get_ytdlp_status(app: AppHandle) -> Result<YtdlpStatus, String> {
         latest_version,
         update_available,
         days_outdated,
+        managed_by_app,
+        install_path: path.to_string_lossy().into_owned(),
     })
 }
 
@@ -128,7 +195,15 @@ struct YtdlpUpdateResult {
 
 #[tauri::command]
 async fn update_ytdlp(app: AppHandle) -> Result<YtdlpUpdateResult, String> {
-    let current_path = ytdlp_path(&app);
+    let (current_path, managed_by_app) = resolve_ytdlp(&app)
+        .await
+        .ok_or_else(|| "yt-dlp is not installed".to_string())?;
+    if !managed_by_app {
+        return Err(format!(
+            "This yt-dlp installation is managed externally at {}. Update it with Homebrew, pip, or the tool used to install it.",
+            current_path.display()
+        ));
+    }
     let previous_version = read_ytdlp_version(&current_path)
         .await
         .unwrap_or_else(|_| "Unknown".to_string());
@@ -191,19 +266,21 @@ async fn download_deps(app: AppHandle) -> Result<(), String> {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
     // — yt-dlp —
-    if read_ytdlp_version(&ytdlp_path(&app)).await.is_err() {
-        tokio::fs::remove_file(ytdlp_path(&app)).await.ok();
+    if resolve_ytdlp(&app).await.is_none() {
+        let managed_ytdlp = managed_ytdlp_path(&app);
+        tokio::fs::remove_file(&managed_ytdlp).await.ok();
         app.emit("setup-task", "Downloading yt-dlp…").ok();
-        download_file(&app, ytdlp_download_url(), &ytdlp_path(&app), 0.0, 0.12).await?;
-        make_executable(&ytdlp_path(&app));
-        read_ytdlp_version(&ytdlp_path(&app))
+        download_file(&app, ytdlp_download_url(), &managed_ytdlp, 0.0, 0.12).await?;
+        make_executable(&managed_ytdlp);
+        read_ytdlp_version(&managed_ytdlp)
             .await
             .map_err(|e| format!("Downloaded yt-dlp could not be validated: {e}"))?;
     }
 
     // — ffmpeg —
-    if !ffmpeg_is_working(&ffmpeg_path(&app)).await {
-        tokio::fs::remove_file(ffmpeg_path(&app)).await.ok();
+    if resolve_ffmpeg(&app).await.is_none() {
+        let managed_ffmpeg = managed_ffmpeg_path(&app);
+        tokio::fs::remove_file(&managed_ffmpeg).await.ok();
         let (ffmpeg_url, ffmpeg_bin) = if cfg!(windows) {
             (
                 "https://github.com/BtbN/ffmpeg-builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip",
@@ -220,7 +297,7 @@ async fn download_deps(app: AppHandle) -> Result<(), String> {
         app.emit("setup-task", "Extracting ffmpeg…").ok();
         app.emit("setup-progress", 0.93_f64).ok();
 
-        let dest = ffmpeg_path(&app);
+        let dest = managed_ffmpeg.clone();
         tokio::task::spawn_blocking(move || {
             extract_binary(&zip_path, ffmpeg_bin, &dest)?;
             std::fs::remove_file(&zip_path).ok();
@@ -229,9 +306,9 @@ async fn download_deps(app: AppHandle) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())??;
 
-        make_executable(&ffmpeg_path(&app));
-        if !ffmpeg_is_working(&ffmpeg_path(&app)).await {
-            tokio::fs::remove_file(ffmpeg_path(&app)).await.ok();
+        make_executable(&managed_ffmpeg);
+        if !ffmpeg_is_working(&managed_ffmpeg).await {
+            tokio::fs::remove_file(&managed_ffmpeg).await.ok();
             return Err("Downloaded ffmpeg could not be validated".to_string());
         }
     }
@@ -261,6 +338,12 @@ async fn start_download(
     }
 
     // Build yt-dlp argument list
+    let (yt_dlp, _) = resolve_ytdlp(&app)
+        .await
+        .ok_or_else(|| "yt-dlp is not installed".to_string())?;
+    let (ffmpeg, _) = resolve_ffmpeg(&app)
+        .await
+        .ok_or_else(|| "ffmpeg is not installed".to_string())?;
     let mut args: Vec<String> = format_args;
     args.push("--no-ignore-errors".to_string());
     let session_cookie_path = cookie_path_for_browser(&state.cookie_dir, &cookie_browser)?;
@@ -277,7 +360,7 @@ async fn start_download(
             args.push(cookie_path);
         }
     }
-    let ffmpeg_dir = bin_dir(&app).to_string_lossy().into_owned();
+    let ffmpeg_location = ffmpeg.to_string_lossy().into_owned();
     args.extend([
         "-S".to_string(),
         "res,fps,br".to_string(),
@@ -286,7 +369,7 @@ async fn start_download(
         "--remux-video".to_string(),
         "mp4".to_string(),
         "--ffmpeg-location".to_string(),
-        ffmpeg_dir,
+        ffmpeg_location,
         "--newline".to_string(),
         "-P".to_string(),
         output_path.clone(),
@@ -296,7 +379,7 @@ async fn start_download(
     std::fs::create_dir_all(&output_path)
         .map_err(|e| format!("Cannot create output folder: {}", e))?;
 
-    let mut cmd = tokio::process::Command::new(ytdlp_path(&app));
+    let mut cmd = tokio::process::Command::new(yt_dlp);
     cmd.args(&args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());

@@ -35,6 +35,7 @@ const openFolderBtn    = document.getElementById("open-folder-btn");
 let outputPath = "";
 let isDownloading = false;
 let isUpdatingYtdlp = false;
+let ytdlpManagedByApp = true;
 let hadAnyDownload = false;
 
 // ── Init ──────────────────────────────────────────────────────
@@ -227,6 +228,9 @@ openFolderBtn.addEventListener("click", async () => {
 });
 
 updateYtdlpBtn.addEventListener("click", async () => {
+  if (!ytdlpManagedByApp) {
+    return;
+  }
   isUpdatingYtdlp = true;
   updateYtdlpBtn.disabled = true;
   downloadBtn.disabled = true;
@@ -249,7 +253,7 @@ updateYtdlpBtn.addEventListener("click", async () => {
     ytdlpUpdateStatus.style.color = "var(--error)";
   } finally {
     isUpdatingYtdlp = false;
-    updateYtdlpBtn.disabled = isDownloading;
+    updateYtdlpBtn.disabled = isDownloading || !ytdlpManagedByApp;
     downloadBtn.disabled = isDownloading;
     updateYtdlpBtn.textContent = "Update yt-dlp";
   }
@@ -259,14 +263,20 @@ updateYtdlpBtn.addEventListener("click", async () => {
 async function refreshYtdlpStatus() {
   try {
     const status = await invoke("get_ytdlp_status");
-    ytdlpVersion.textContent = "Version: " + status.current_version;
+    ytdlpManagedByApp = status.managed_by_app;
+    ytdlpVersion.textContent =
+      `Version: ${status.current_version} · ${status.managed_by_app ? "App managed" : "System installation"}`;
+    ytdlpVersion.title = status.install_path;
+    updateYtdlpBtn.disabled = !status.managed_by_app;
+    updateYtdlpBtn.textContent = status.managed_by_app ? "Update yt-dlp" : "Managed externally";
 
     if (status.update_available) {
       const age = status.days_outdated == null
         ? ""
         : ` · ${status.days_outdated} ${status.days_outdated === 1 ? "day" : "days"} outdated`;
       ytdlpUpdateStatus.textContent =
-        `Update available: ${status.latest_version}${age}`;
+        `Update available: ${status.latest_version}${age}` +
+        (status.managed_by_app ? "" : " · Update it with your package manager.");
       ytdlpUpdateStatus.style.color = "var(--warning)";
     } else if (status.latest_version) {
       ytdlpUpdateStatus.textContent = "Up to date.";
@@ -276,6 +286,7 @@ async function refreshYtdlpStatus() {
       ytdlpUpdateStatus.style.color = "var(--muted)";
     }
   } catch (err) {
+    ytdlpManagedByApp = true;
     ytdlpVersion.textContent = "Version unavailable";
     ytdlpUpdateStatus.textContent = String(err);
     ytdlpUpdateStatus.style.color = "var(--error)";
@@ -316,7 +327,7 @@ function setDownloading(active) {
   downloadBtn.classList.toggle("hidden", active);
   cancelBtn.classList.toggle("hidden", !active);
   downloadBtn.disabled = active || isUpdatingYtdlp;
-  updateYtdlpBtn.disabled = active;
+  updateYtdlpBtn.disabled = active || !ytdlpManagedByApp;
 }
 
 function appendLog(line) {
