@@ -1,7 +1,8 @@
 // Tauri v2 globals (withGlobalTauri: true in tauri.conf.json)
-const { invoke } = window.__TAURI__.core;
-const { listen }  = window.__TAURI__.event;
-const { open: openDialog } = window.__TAURI__.dialog;
+const tauri = window.__TAURI__;
+const invoke = tauri?.core?.invoke;
+const listen = tauri?.event?.listen;
+const openDialog = tauri?.dialog?.open;
 
 // ── DOM refs ─────────────────────────────────────────────────
 const setupScreen      = document.getElementById("setup-screen");
@@ -38,7 +39,13 @@ let hadAnyDownload = false;
 
 // ── Init ──────────────────────────────────────────────────────
 async function init() {
-  // Register event listeners before showing anything
+  showSetup();
+  setupTaskLabel.textContent = "Checking required tools…";
+
+  if (!invoke || !listen) {
+    throw new Error("The application bridge did not load. Please reinstall the app.");
+  }
+
   await registerListeners();
 
   const hasDeps = await invoke("check_deps");
@@ -60,6 +67,16 @@ function showSetupError(msg) {
   setupError.textContent = "Error: " + msg;
   setupError.classList.remove("hidden");
   setupRetryBtn.classList.remove("hidden");
+}
+
+function showStartupError(error) {
+  showSetup();
+  setupTaskLabel.textContent = "Video Downloader could not start";
+  setupProgressFill.style.width = "0%";
+  setupProgressPct.textContent = "";
+  setupRetryBtn.classList.add("hidden");
+  setupError.textContent = "Error: " + String(error);
+  setupError.classList.remove("hidden");
 }
 
 async function runSetup() {
@@ -157,6 +174,11 @@ pasteBtn.addEventListener("click", async () => {
 });
 
 folderBtn.addEventListener("click", async () => {
+  if (!openDialog) {
+    dlStatus.textContent = "Folder picker is unavailable. Restart or reinstall the app.";
+    dlStatus.style.color = "var(--error)";
+    return;
+  }
   const selected = await openDialog({ directory: true, multiple: false, title: "Choose save folder" });
   if (selected) {
     outputPath = selected;
@@ -307,4 +329,4 @@ function delay(ms) {
 }
 
 // ── Start ─────────────────────────────────────────────────────
-init();
+init().catch(showStartupError);

@@ -581,10 +581,11 @@ fn secure_cookie_file(path: &std::path::Path) {
 fn secure_cookie_file(_path: &std::path::Path) {}
 
 async fn read_ytdlp_version(path: &std::path::Path) -> Result<String, String> {
-    let output = tokio::process::Command::new(path)
-        .arg("--version")
-        .output()
+    let mut command = tokio::process::Command::new(path);
+    command.arg("--version").kill_on_drop(true);
+    let output = tokio::time::timeout(std::time::Duration::from_secs(10), command.output())
         .await
+        .map_err(|_| "yt-dlp version check timed out".to_string())?
         .map_err(|e| format!("Could not run yt-dlp: {e}"))?;
 
     if !output.status.success() {
@@ -605,12 +606,16 @@ async fn read_ytdlp_version(path: &std::path::Path) -> Result<String, String> {
 }
 
 async fn ffmpeg_is_working(path: &std::path::Path) -> bool {
-    tokio::process::Command::new(path)
+    let mut command = tokio::process::Command::new(path);
+    command
         .arg("-version")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .status()
+        .kill_on_drop(true);
+    tokio::time::timeout(std::time::Duration::from_secs(10), command.status())
         .await
+        .ok()
+        .and_then(Result::ok)
         .map(|status| status.success())
         .unwrap_or(false)
 }
